@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Trip Planner – Map & Search</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: system-ui, sans-serif; }
+    #map { position: absolute; inset: 0; }
+    #searchBox {
+      position: absolute; top: 12px; left: 50%; transform: translateX(-50%);
+      z-index: 1000; width: min(420px, 90vw);
+    }
+    #searchInput {
+      width: 100%; padding: 12px 16px; font-size: 16px;
+      border: none; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,.3);
+    }
+    #suggestions {
+      list-style: none; margin: 4px 0 0; padding: 0; background: #fff;
+      border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,.3); overflow: hidden;
+    }
+    #suggestions li { padding: 10px 16px; cursor: pointer; display: flex; justify-content: space-between; }
+    #suggestions li:hover, #suggestions li.active { background: #eef3ff; }
+    #suggestions .cat { color: #777; font-size: 12px; }
+    #status {
+      position: absolute; bottom: 10px; left: 10px; z-index: 1000;
+      background: #fff; padding: 6px 10px; border-radius: 6px; font-size: 13px;
+    }
+  </style>
+</head>
+<body>
+  <div id="searchBox">
+    <input id="searchInput" type="text" placeholder="Search a place (e.g. Rob...)" autocomplete="off" />
+    <ul id="suggestions" hidden></ul>
+  </div>
+  <div id="map"></div>
+  <div id="status">Connecting to server...</div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script>
+    const API = "http://localhost:8080";
+
+    // --- Map setup (centered on Dehradun) ---
+    const map = L.map("map").setView([30.3165, 78.0322], 12);
+    L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      maxZoom: 19,
+      attribution: "&copy; OpenStreetMap contributors",
+    }).addTo(map);
+
+    const markers = new Map(); // place name -> Leaflet marker
+    let highlight = null;
+
+    function addMarker(place) {
+      const m = L.marker([place.lat, place.lng]).addTo(map);
+      m.bindPopup(`<b>${place.name}</b><br>${place.category}`);
+      markers.set(place.name, m);
+    }
+
+    // Load all places as markers
+    fetch(`${API}/places`)
+      .then(r => r.json())
+      .then(places => {
+        places.forEach(addMarker);
+        document.getElementById("status").textContent = `${places.length} places loaded`;
+      })
+      .catch(() => {
+        document.getElementById("status").textContent =
+          "Server not reachable – start ./server first";
+      });
+
+    // --- Search & autocomplete ---
+    const input = document.getElementById("searchInput");
+    const list = document.getElementById("suggestions");
+    let debounce, results = [], activeIdx = -1;
+
+    function render() {
+      list.innerHTML = "";
+      list.hidden = results.length === 0;
+      results.forEach((p, i) => {
+        const li = document.createElement("li");
+        li.className = i === activeIdx ? "active" : "";
+        li.innerHTML = `<span>${p.name}</span><span class="cat">${p.category}</span>`;
+        li.addEventListener("mousedown", () => selectPlace(p));
+        list.appendChild(li);
+      });
+    }
+
+    function selectPlace(p) {
+      input.value = p.name;
+      results = [];
+      render();
+      map.flyTo([p.lat, p.lng], 16);
+      const m = markers.get(p.name);
+      if (m) m.openPopup();
+    }
+
+    input.addEventListener("input", () => {
+      clearTimeout(debounce);
+      const q = input.value.trim();
+      if (!q) { results = []; render(); return; }
+      debounce = setTimeout(async () => {
+        try {
+          const r = await fetch(`${API}/search?q=${encodeURIComponent(q)}`);
+          results = await r.json();
+          activeIdx = -1;
+          render();
+        } catch (e) { /* server offline */ }
+      }, 150);
+    });
+
+    // Keyboard navigation
+    input.addEventListener("keydown", e => {
+      if (!results.length) return;
+      if (e.key === "ArrowDown") { activeIdx = (activeIdx + 1) % results.length; render(); e.preventDefault(); }
+      else if (e.key === "ArrowUp") { activeIdx = (activeIdx - 1 + results.length) % results.length; render(); e.preventDefault(); }
+      else if (e.key === "Enter") { selectPlace(results[Math.max(activeIdx, 0)]); }
+      else if (e.key === "Escape") { results = []; render(); }
+    });
+
+    input.addEventListener("blur", () => setTimeout(() => { list.hidden = true; }, 100));
+    input.addEventListener("focus", () => { if (results.length) list.hidden = false; });
+  </script>
+</body>
+</html>
